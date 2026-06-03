@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 from ical_mcp.config import Config, Provider, detect_provider
@@ -27,19 +25,12 @@ class TestConfig:
         monkeypatch.setenv("ICAL_MCP_URL", "https://caldav.icloud.com")
         monkeypatch.setenv("ICAL_MCP_USERNAME", "user@icloud.com")
         monkeypatch.setenv("ICAL_MCP_PASSWORD", "xxxx-xxxx-xxxx-xxxx")
+        monkeypatch.delenv("ICAL_MCP_WRITABLE_CALENDARS", raising=False)
         config = Config.from_env()
         assert config.url == "https://caldav.icloud.com"
         assert config.provider == Provider.ICLOUD
-        assert config.read_only is False
+        assert config.writable_calendars == set()
         assert config.timezone == "UTC"
-
-    def test_read_only_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("ICAL_MCP_URL", "https://caldav.icloud.com")
-        monkeypatch.setenv("ICAL_MCP_USERNAME", "user@icloud.com")
-        monkeypatch.setenv("ICAL_MCP_PASSWORD", "xxxx")
-        monkeypatch.setenv("ICAL_MCP_READ_ONLY", "true")
-        config = Config.from_env()
-        assert config.read_only is True
 
     def test_custom_timezone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ICAL_MCP_URL", "https://caldav.icloud.com")
@@ -62,3 +53,70 @@ class TestConfig:
         monkeypatch.setenv("ICAL_MCP_PASSWORD", "pass")
         config = Config.from_env()
         assert config.url == "https://caldav.icloud.com"
+
+
+class TestWritableCalendars:
+    def _config(self, **kwargs) -> Config:
+        defaults = dict(url="https://caldav.icloud.com", username="u", password="p")
+        defaults.update(kwargs)
+        return Config(**defaults)
+
+    def test_default_is_read_only(self) -> None:
+        config = self._config()
+        assert config.writable_calendars == set()
+        assert not config.is_writable("home", "Matthew")
+        assert not config.all_writable
+
+    def test_single_writable_by_id(self) -> None:
+        config = self._config(writable_calendars={"home"})
+        assert config.is_writable("home", "Matthew")
+        assert not config.is_writable("other-id", "Other Calendar")
+
+    def test_single_writable_by_name(self) -> None:
+        config = self._config(writable_calendars={"Matthew"})
+        assert config.is_writable("home", "Matthew")
+        assert not config.is_writable("other-id", "Other Calendar")
+
+    def test_multiple_writable(self) -> None:
+        config = self._config(writable_calendars={"home", "No Conflicts"})
+        assert config.is_writable("home", "Matthew")
+        assert config.is_writable("xxx", "No Conflicts")
+        assert not config.is_writable("yyy", "Shared Calendar")
+
+    def test_wildcard_all_writable(self) -> None:
+        config = self._config(writable_calendars={"*"})
+        assert config.all_writable
+        assert config.is_writable("anything", "Any Calendar")
+
+    def test_from_env_single(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ICAL_MCP_URL", "https://caldav.icloud.com")
+        monkeypatch.setenv("ICAL_MCP_USERNAME", "user")
+        monkeypatch.setenv("ICAL_MCP_PASSWORD", "pass")
+        monkeypatch.setenv("ICAL_MCP_WRITABLE_CALENDARS", "home")
+        config = Config.from_env()
+        assert config.writable_calendars == {"home"}
+
+    def test_from_env_multiple(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ICAL_MCP_URL", "https://caldav.icloud.com")
+        monkeypatch.setenv("ICAL_MCP_USERNAME", "user")
+        monkeypatch.setenv("ICAL_MCP_PASSWORD", "pass")
+        monkeypatch.setenv("ICAL_MCP_WRITABLE_CALENDARS", "home, No Conflicts")
+        config = Config.from_env()
+        assert config.writable_calendars == {"home", "No Conflicts"}
+
+    def test_from_env_wildcard(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ICAL_MCP_URL", "https://caldav.icloud.com")
+        monkeypatch.setenv("ICAL_MCP_USERNAME", "user")
+        monkeypatch.setenv("ICAL_MCP_PASSWORD", "pass")
+        monkeypatch.setenv("ICAL_MCP_WRITABLE_CALENDARS", "*")
+        config = Config.from_env()
+        assert config.all_writable
+
+    def test_from_env_empty_is_read_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ICAL_MCP_URL", "https://caldav.icloud.com")
+        monkeypatch.setenv("ICAL_MCP_USERNAME", "user")
+        monkeypatch.setenv("ICAL_MCP_PASSWORD", "pass")
+        monkeypatch.setenv("ICAL_MCP_WRITABLE_CALENDARS", "")
+        config = Config.from_env()
+        assert config.writable_calendars == set()
+        assert not config.is_writable("home", "Matthew")

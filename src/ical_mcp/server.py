@@ -40,9 +40,20 @@ async def _get_client() -> CalDAVClient:
     return client
 
 
-def _check_writable() -> None:
-    if _config and _config.read_only:
-        raise ReadOnlyError("Write operations are disabled (ICAL_MCP_READ_ONLY=true).")
+def _check_writable(calendar_id: str, calendar_name: str) -> None:
+    if _config is None:
+        raise ReadOnlyError("Server not initialized.")
+    if not _config.is_writable(calendar_id, calendar_name):
+        writable = _config.writable_calendars
+        if not writable:
+            raise ReadOnlyError(
+                "All calendars are read-only (ICAL_MCP_WRITABLE_CALENDARS is not set). "
+                "Set ICAL_MCP_WRITABLE_CALENDARS to allow writes."
+            )
+        raise ReadOnlyError(
+            f"Calendar '{calendar_name}' is read-only. "
+            f"Writable calendars: {', '.join(sorted(writable))}"
+        )
 
 
 @mcp.tool()
@@ -54,7 +65,10 @@ async def list_calendars() -> str:
     """
     client = await _get_client()
     calendars = client.get_calendars()
-    return json.dumps([c.to_dict() for c in calendars], indent=2)
+    return json.dumps(
+        [c.to_dict(writable=_config.is_writable(c.id, c.name) if _config else False) for c in calendars],
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -116,9 +130,9 @@ async def create_event(
     Confirm the calendar, date, time, and details with the user before calling.
     Returns the created event with its ID and ETag for future updates.
     """
-    _check_writable()
     client = await _get_client()
     cal = client.find_calendar(calendar)
+    _check_writable(cal.id, cal.name)
     event = await client.create_event(
         cal,
         title=title,
@@ -163,9 +177,9 @@ async def update_event(
     Requires the event's ETag for optimistic concurrency; if the event was
     modified elsewhere, the update will fail with a conflict error.
     """
-    _check_writable()
     client = await _get_client()
     cal = client.find_calendar(calendar)
+    _check_writable(cal.id, cal.name)
     event = await client.update_event(
         cal,
         uid=event_id,
@@ -196,9 +210,9 @@ async def delete_event(
     Confirm with the user before deleting. Pass the ETag from get_events
     to ensure you're deleting the right version.
     """
-    _check_writable()
     client = await _get_client()
     cal = client.find_calendar(calendar)
+    _check_writable(cal.id, cal.name)
     await client.delete_event(cal, event_id, etag=etag)
     return json.dumps({"deleted": event_id, "calendar": cal.name})
 

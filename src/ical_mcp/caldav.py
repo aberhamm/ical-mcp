@@ -229,6 +229,7 @@ class CalDAVClient:
         resp = await self._client.get(url)
         self._check_response(resp, [200])
 
+        logger.info("BACKUP before update [%s/%s]:\n%s", calendar.name, uid, resp.text)
         existing = parse_vcalendar(resp.text)
         if not existing:
             raise NotFoundError(f"Event {uid} not found in calendar {calendar.name}")
@@ -278,6 +279,11 @@ class CalDAVClient:
         self, calendar: Calendar, uid: str, etag: str | None = None
     ) -> None:
         url = f"{calendar.url.rstrip('/')}/{uid}.ics"
+
+        backup_resp = await self._client.get(url)
+        if backup_resp.status_code == 200:
+            logger.info("BACKUP before delete [%s/%s]:\n%s", calendar.name, uid, backup_resp.text)
+
         headers: dict[str, str] = {}
         if etag:
             headers["If-Match"] = f'"{etag}"'

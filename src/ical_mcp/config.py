@@ -32,12 +32,23 @@ class Config:
     username: str
     password: str
     timezone: str = "UTC"
-    read_only: bool = False
+    writable_calendars: set[str] = field(default_factory=set)
     provider: Provider = field(init=False)
 
     def __post_init__(self) -> None:
         self.url = self.url.rstrip("/")
         self.provider = detect_provider(self.url)
+
+    @property
+    def all_writable(self) -> bool:
+        return "*" in self.writable_calendars
+
+    def is_writable(self, calendar_id: str, calendar_name: str) -> bool:
+        if not self.writable_calendars:
+            return False
+        if self.all_writable:
+            return True
+        return calendar_id in self.writable_calendars or calendar_name in self.writable_calendars
 
     @classmethod
     def from_env(cls) -> Config:
@@ -58,11 +69,14 @@ class Config:
                 f"Missing required environment variables: {', '.join(missing)}. "
                 "See .env.example for configuration."
             )
+
+        raw = os.environ.get("ICAL_MCP_WRITABLE_CALENDARS", "").strip()
+        writable = {s.strip() for s in raw.split(",") if s.strip()} if raw else set()
+
         return cls(
             url=url,
             username=username,
             password=password,
             timezone=os.environ.get("ICAL_MCP_TIMEZONE", "UTC"),
-            read_only=os.environ.get("ICAL_MCP_READ_ONLY", "").lower()
-            in ("true", "1", "yes"),
+            writable_calendars=writable,
         )

@@ -11,10 +11,12 @@ class Calendar:
     color: str | None = None
     ctag: str | None = None
 
-    def to_dict(self) -> dict:
-        d = {"id": self.id, "name": self.name}
+    def to_dict(self, writable: bool | None = None) -> dict:
+        d: dict = {"id": self.id, "name": self.name}
         if self.color:
             d["color"] = self.color
+        if writable is not None:
+            d["access"] = "read-write" if writable else "read-only"
         return d
 
 
