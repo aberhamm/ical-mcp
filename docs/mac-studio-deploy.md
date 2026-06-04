@@ -22,7 +22,7 @@ ical-mcp is a CalDAV-based MCP server for Apple Calendar (iCloud). It provides 6
 ssh matthew@100.72.204.108
 
 # Clone and install
-cd ~/projects  # or wherever projects live on the Studio
+cd ~/apps
 git clone https://github.com/aberhamm/ical-mcp.git
 cd ical-mcp
 uv sync
@@ -33,7 +33,7 @@ uv run ical-mcp --help
 
 ## Configuration
 
-Create `~/projects/ical-mcp/.env` with:
+Create `~/apps/ical-mcp/.env` with:
 
 ```bash
 ICAL_MCP_URL=https://caldav.icloud.com
@@ -49,7 +49,7 @@ The writable calendar ID is "Claude Calendar" — the only calendar that accepts
 
 ```bash
 # Test manually first
-cd ~/projects/ical-mcp
+cd ~/apps/ical-mcp
 set -a && source .env && set +a
 uv run ical-mcp --transport http --host 100.72.204.108 --port 8093
 ```
@@ -63,7 +63,21 @@ curl -X POST http://100.72.204.108:8093/mcp \
 
 ## LaunchDaemon setup
 
-Create `/Library/LaunchDaemons/com.ical-mcp.server.plist`:
+First, create the wrapper script at `~/apps/ical-mcp/run.sh`:
+
+```bash
+#!/bin/bash
+set -a
+source /Users/matthew/apps/ical-mcp/.env
+set +a
+exec /Users/matthew/.local/bin/uv --directory /Users/matthew/apps/ical-mcp run ical-mcp --transport http --host 100.72.204.108 --port 8093
+```
+
+```bash
+chmod +x ~/apps/ical-mcp/run.sh
+```
+
+Then create `/Library/LaunchDaemons/com.ical-mcp.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -71,33 +85,19 @@ Create `/Library/LaunchDaemons/com.ical-mcp.server.plist`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ical-mcp.server</string>
+    <string>com.ical-mcp</string>
+    <key>UserName</key>
+    <string>matthew</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/matthew/.local/bin/uv</string>
-        <string>--directory</string>
-        <string>/Users/matthew/projects/ical-mcp</string>
-        <string>run</string>
-        <string>ical-mcp</string>
-        <string>--transport</string>
-        <string>http</string>
-        <string>--host</string>
-        <string>100.72.204.108</string>
-        <string>--port</string>
-        <string>8093</string>
+        <string>/Users/matthew/apps/ical-mcp/run.sh</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>ICAL_MCP_URL</key>
-        <string>https://caldav.icloud.com</string>
-        <key>ICAL_MCP_USERNAME</key>
-        <string>thenamesabe@gmail.com</string>
-        <key>ICAL_MCP_PASSWORD</key>
-        <string>kmgr-zsrw-tfix-zepe</string>
-        <key>ICAL_MCP_TIMEZONE</key>
-        <string>Europe/Berlin</string>
-        <key>ICAL_MCP_WRITABLE_CALENDARS</key>
-        <string>A249E35C-8070-471D-A395-12590D441844</string>
+        <key>HOME</key>
+        <string>/Users/matthew</string>
+        <key>PATH</key>
+        <string>/Users/matthew/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -108,17 +108,18 @@ Create `/Library/LaunchDaemons/com.ical-mcp.server.plist`:
     <key>StandardErrorPath</key>
     <string>/var/log/ical-mcp.err</string>
     <key>WorkingDirectory</key>
-    <string>/Users/matthew/projects/ical-mcp</string>
+    <string>/Users/matthew/apps/ical-mcp</string>
 </dict>
 </plist>
 ```
 
-**Important:** Verify the path to `uv` on the Mac Studio (`which uv`) and the projects directory before deploying. Adjust `ProgramArguments` accordingly.
+Credentials stay in `~/apps/ical-mcp/.env` (gitignored) and are sourced by the wrapper script — the plist itself contains no secrets.
 
-Load it:
+Create the log files and load it:
 ```bash
-sudo launchctl load /Library/LaunchDaemons/com.ical-mcp.server.plist
-sudo launchctl start com.ical-mcp.server
+sudo touch /var/log/ical-mcp.log /var/log/ical-mcp.err
+sudo chown matthew:staff /var/log/ical-mcp.log /var/log/ical-mcp.err
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.ical-mcp.plist
 
 # Check status
 sudo launchctl list | grep ical-mcp
@@ -127,7 +128,7 @@ tail -f /var/log/ical-mcp.err
 
 ### Ordering note
 
-This service must start AFTER tailscaled since it binds to the Tailscale IP. If it fails on boot, add a dependency or use a LaunchAgent instead (the Mac Studio should have auto-login configured).
+This service binds to the Tailscale IP. With `KeepAlive: true`, if the bind fails at boot before Tailscale is ready, launchd restarts it automatically until it succeeds.
 
 ## How agents connect
 
