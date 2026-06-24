@@ -11,6 +11,7 @@ import logging
 import uuid
 from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape as _xml_escape
 
 import httpx
 
@@ -225,7 +226,7 @@ class CalDAVClient:
         location: str | None = None,
         all_day: bool | None = None,
     ) -> Event:
-        url = f"{calendar.url.rstrip('/')}/{uid}.ics"
+        url = await self._resolve_event_url(calendar, uid)
         resp = await self._client.get(url)
         self._check_response(resp, [200])
 
@@ -278,7 +279,7 @@ class CalDAVClient:
     async def delete_event(
         self, calendar: Calendar, uid: str, etag: str | None = None
     ) -> None:
-        url = f"{calendar.url.rstrip('/')}/{uid}.ics"
+        url = await self._resolve_event_url(calendar, uid)
 
         backup_resp = await self._client.get(url)
         if backup_resp.status_code == 200:
@@ -289,6 +290,47 @@ class CalDAVClient:
             headers["If-Match"] = f'"{etag}"'
         resp = await self._client.delete(url, headers=headers)
         self._check_response(resp, [200, 204])
+
+    async def _resolve_event_url(self, calendar: Calendar, uid: str) -> str:
+        """Resolve the actual CalDAV resource URL for an event UID.
+
+        The naive `{calendar}/{uid}.ics` path holds only when the resource
+        filename equals the iCalendar UID. iCloud (and some other servers)
+        keep the original filename used at PUT time while rewriting the
+        VEVENT's UID on sync, so `get_events` returns a UID that no longer
+        matches the href — making `{uid}.ics` 404. Fast-path the direct URL,
+        then fall back to a UID-filtered calendar-query to find the real href.
+        """
+        direct = f"{calendar.url.rstrip('/')}/{uid}.ics"
+        resp = await self._client.get(direct)
+        if resp.status_code == 200:
+            return direct
+        if resp.status_code != 404:
+            self._check_response(resp, [200])
+
+        body = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            f'<C:calendar-query xmlns:D="{NS_DAV}" xmlns:C="{NS_CALDAV}">'
+            "<D:prop><D:getetag/></D:prop>"
+            "<C:filter>"
+            '<C:comp-filter name="VCALENDAR">'
+            '<C:comp-filter name="VEVENT">'
+            '<C:prop-filter name="UID">'
+            f'<C:text-match collation="i;octet">{_xml_escape(uid)}</C:text-match>'
+            "</C:prop-filter>"
+            "</C:comp-filter>"
+            "</C:comp-filter>"
+            "</C:filter>"
+            "</C:calendar-query>"
+        )
+        report = await self._report(calendar.url, body)
+        tree = ET.fromstring(report.text)
+        for response in tree.findall(f"{{{NS_DAV}}}response"):
+            href_el = response.find(f"{{{NS_DAV}}}href")
+            if href_el is not None and href_el.text:
+                return self._resolve_url(href_el.text)
+
+        raise NotFoundError(f"Event {uid} not found in calendar {calendar.name}")
 
     # -- Discovery helpers ----------------------------------------------------
 
